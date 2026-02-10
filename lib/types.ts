@@ -71,6 +71,10 @@ export interface Requisition {
   procurementApprovedAt?: string
   accountApprovedBy?: string
   accountApprovedAt?: string
+  // Signature images stored as base64 strings
+  requesterSignature?: string
+  procurementSignature?: string
+  accountSignature?: string
 }
 
 export interface ActivityLogEntry {

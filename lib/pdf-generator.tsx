@@ -1,6 +1,10 @@
 import type { Requisition } from './types'
 
-export function generateRequisitionPDF(requisition: Requisition) {
+export function generateRequisitionPDF(requisition: Requisition, signatureData?: {
+  requestedBy?: { name: string; date: string; signature?: string };
+  reviewedBy?: { name: string; date: string; signature?: string };
+  approvedBy?: { name: string; date: string; signature?: string };
+}) {
   // Create a new window for the PDF content
   const printWindow = window.open('', '_blank')
   if (!printWindow) {
@@ -9,28 +13,61 @@ export function generateRequisitionPDF(requisition: Requisition) {
   }
 
   const formatCurrency = (amount: number) =>
-    amount.toLocaleString('en-NG', {
-      style: 'currency',
-      currency: 'NGN',
-      minimumFractionDigits: 2,
-    })
+    `₦${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
 
   const formatDate = (dateString: string) =>
-    new Date(dateString).toLocaleDateString('en-GB')
+    new Date(dateString).toISOString().split('T')[0]
+
+  // Get the logo URL with absolute path
+  const logoUrl = `${window.location.origin}/images/gladex-logo.jpg`
+
+  // Extract project details from purpose
+  const purposeParts = (requisition.purpose || '').split(' | ')
+  const projectTitle = purposeParts.find(p => p.startsWith('Project: '))?.replace('Project: ', '') || ''
+  const jobNo = purposeParts.find(p => p.startsWith('Job No: '))?.replace('Job No: ', '') || ''
+  const client = purposeParts.find(p => p.startsWith('Client: '))?.replace('Client: ', '') || ''
 
   const itemsHtml = (requisition.items || [])
     .map(
       (item, index) => `
-      <div class="grid grid-cols-12 border-b">
-        <div class="col-span-1 border-r p-2 text-center text-sm">${index + 1}</div>
-        <div class="col-span-5 border-r p-2 text-sm">${item.description || 'N/A'}</div>
-        <div class="col-span-1 border-r p-2 text-center text-sm">${item.quantity || 0}</div>
-        <div class="col-span-2 border-r p-2 text-right text-sm">${formatCurrency(item.unitPrice || 0)}</div>
-        <div class="col-span-3 p-2 text-right text-sm font-semibold">${formatCurrency(item.totalPrice || 0)}</div>
+      <div class="grid grid-cols-12 border-b border-black text-xs">
+        <div class="col-span-1 p-2 border-r border-black text-center flex items-center justify-center">
+          ${index + 1}
+        </div>
+        <div class="col-span-4 p-1 border-r border-black">
+          ${item.description || ''}
+        </div>
+        <div class="col-span-1 p-1 border-r border-black text-center">
+          ${item.quantity || 0}
+        </div>
+        <div class="col-span-2 p-1 border-r border-black text-right">
+          ${(item.unitPrice || 0).toFixed(2)}
+        </div>
+        <div class="col-span-2 p-2 border-r border-black text-right">
+          ${formatCurrency(item.totalPrice || 0)}
+        </div>
+        <div class="col-span-2 p-1">
+          &nbsp;
+        </div>
       </div>
     `
     )
     .join('')
+
+  // Add empty rows to match form layout (minimum 5 rows for better appearance)
+  const emptyRowsCount = Math.max(0, 5 - (requisition.items?.length || 0))
+  const emptyRowsHtml = Array.from({ length: emptyRowsCount }, (_, i) => `
+    <div class="grid grid-cols-12 border-b border-black text-xs">
+      <div class="col-span-1 p-2 border-r border-black text-center">
+        ${(requisition.items?.length || 0) + i + 1}
+      </div>
+      <div class="col-span-4 p-1 border-r border-black">&nbsp;</div>
+      <div class="col-span-1 p-1 border-r border-black">&nbsp;</div>
+      <div class="col-span-2 p-1 border-r border-black">&nbsp;</div>
+      <div class="col-span-2 p-2 border-r border-black">&nbsp;</div>
+      <div class="col-span-2 p-1">&nbsp;</div>
+    </div>
+  `).join('')
 
   const printDocument = `
     <!DOCTYPE html>
@@ -46,7 +83,6 @@ export function generateRequisitionPDF(requisition: Requisition) {
           color: black; 
           -webkit-print-color-adjust: exact;
           print-color-adjust: exact;
-          padding: 20px;
         }
         @page { size: A4; margin: 0.5in; }
         @media print {
@@ -65,7 +101,6 @@ export function generateRequisitionPDF(requisition: Requisition) {
         .col-span-2 { grid-column: span 2; }
         .col-span-3 { grid-column: span 3; }
         .col-span-4 { grid-column: span 4; }
-        .col-span-5 { grid-column: span 5; }
         .col-span-6 { grid-column: span 6; }
         .col-span-7 { grid-column: span 7; }
         .p-1 { padding: 0.25rem; }
@@ -78,6 +113,7 @@ export function generateRequisitionPDF(requisition: Requisition) {
         .font-semibold { font-weight: 600; }
         .text-center { text-align: center; }
         .text-right { text-align: right; }
+        .text-gray-400 { color: #9ca3af !important; }
         .bg-blue-200 { background-color: #dbeafe !important; }
         .bg-gray-100 { background-color: #f3f4f6 !important; }
         .bg-gray-50 { background-color: #f9fafb !important; }
@@ -90,129 +126,204 @@ export function generateRequisitionPDF(requisition: Requisition) {
         .max-w-full { max-width: 100%; }
         .object-contain { object-fit: contain; }
         .mb-1 { margin-bottom: 0.25rem; }
-        .mb-4 { margin-bottom: 1rem; }
-        .mt-4 { margin-top: 1rem; }
+        .relative { position: relative; }
+        .absolute { position: absolute; }
+        img { max-height: 3rem; max-width: 100%; object-fit: contain; }
       </style>
     </head>
     <body>
-      <div class="border-2">
-        <!-- Header -->
-        <div class="grid grid-cols-12 border-b-2">
-          <div class="col-span-3 border-r-2 p-4 flex items-center justify-center">
-            <div class="text-center">
-              <div class="font-bold text-xl mb-1">GLADEX</div>
-              <div class="text-xs">Dynamic Resources Limited</div>
+      <div class="w-full bg-white">
+        <!-- HEADER SECTION - EXACT MATCH -->
+        <div class="border-2 border-black">
+          <div class="grid grid-cols-12 border-b-2 border-black">
+            <!-- Logo Section -->
+            <div class="col-span-3 p-4 border-r-2 border-black flex items-center justify-center">
+              <img 
+                src="${logoUrl}" 
+                alt="Gladex Logo" 
+                style="height: 4rem; width: auto; object-fit: contain;"
+                onerror="this.style.display='none'; this.parentElement.innerHTML='<div style=\\'text-align: center;\\'><div style=\\'font-weight: bold; font-size: 1.125rem;\\'>GLADEX</div><div style=\\'font-size: 0.75rem;\\'>Dynamic Resources Limited</div></div>';"
+              />
+            </div>
+            
+            <!-- Title Section -->
+            <div class="col-span-6 p-4 border-r-2 border-black flex items-center justify-center">
+              <h1 class="text-xl font-bold text-center">
+                MATERIAL REQUISITION FORM
+              </h1>
+            </div>
+            
+            <!-- Document Info Section -->
+            <div class="col-span-3 p-2">
+              <div class="border border-black p-2 mb-1">
+                <div class="text-xs font-semibold">Doc No:</div>
+                <div class="text-xs">GDRL-PL-QF-005</div>
+              </div>
+              <div class="border border-black p-2">
+                <div class="text-xs font-semibold">Rev./Date:</div>
+                <div class="text-xs">26.06.2024</div>
+              </div>
             </div>
           </div>
-          <div class="col-span-6 border-r-2 p-4 text-center">
-            <div class="font-bold text-xl">MATERIAL REQUISITION FORM</div>
-          </div>
-          <div class="col-span-3 p-2">
-            <div class="text-xs mb-1">Doc. No: GDRL-PL-QF-005</div>
-            <div class="text-xs mb-1">Rev. Date: 26.06.2024</div>
-            <div class="text-xs">Date of Request: ${formatDate(requisition.createdAt || new Date().toISOString())}</div>
-          </div>
-        </div>
 
-        <!-- Form Fields -->
-        <div class="grid grid-cols-12">
-          <div class="col-span-6 border-r p-2">
-            <div class="text-xs mb-1">Client:</div>
-            <div class="border-b text-sm p-1">Gladex Dynamic Resources</div>
-          </div>
-          <div class="col-span-6 p-2">
-            <div class="text-xs mb-1">Requisition No:</div>
-            <div class="border-b text-sm p-1 font-semibold">${requisition.requisitionNumber || 'N/A'}</div>
-          </div>
-        </div>
+          <!-- FORM META SECTION - EXACT LAYOUT -->
+          <div class="p-0">
+            <!-- Row 1 -->
+            <div class="grid grid-cols-12 border-b border-black">
+              <div class="col-span-3 border-r border-black p-2">
+                <div class="text-xs font-semibold mb-1">Date of request:</div>
+                <div class="text-xs">${formatDate(requisition.createdAt || new Date().toISOString())}</div>
+              </div>
+              <div class="col-span-3 border-r border-black p-2">
+                <div class="text-xs font-semibold mb-1">Client:</div>
+                <div class="text-xs">${client}</div>
+              </div>
+              <div class="col-span-6 p-2">
+                <div class="text-xs font-semibold mb-1">Requisition No.:</div>
+                <div class="text-xs">${requisition.requisitionNumber || 'N/A'}</div>
+              </div>
+            </div>
 
-        <div class="grid grid-cols-12 border-t">
-          <div class="col-span-6 border-r p-2">
-            <div class="text-xs mb-1">Requested By:</div>
-            <div class="border-b text-sm p-1">${requisition.requesterName || 'N/A'}</div>
-          </div>
-          <div class="col-span-6 p-2">
-            <div class="text-xs mb-1">Department:</div>
-            <div class="border-b text-sm p-1">${requisition.requesterDepartment || 'N/A'}</div>
-          </div>
-        </div>
+            <!-- Row 2 -->
+            <div class="grid grid-cols-12 border-b border-black">
+              <div class="col-span-6 border-r border-black p-2">
+                <div class="text-xs font-semibold mb-1">Requested By (Name):</div>
+                <div class="text-xs">${requisition.requesterName || 'N/A'}</div>
+              </div>
+              <div class="col-span-6 p-2">
+                <div class="text-xs font-semibold mb-1">Department:</div>
+                <div class="text-xs">${requisition.requesterDepartment || 'N/A'}</div>
+              </div>
+            </div>
 
-        <div class="grid grid-cols-12 border-t">
-          <div class="col-span-6 border-r p-2">
-            <div class="text-xs mb-1">Project Title:</div>
-            <div class="border-b text-sm p-1">${requisition.purpose || 'N/A'}</div>
-          </div>
-          <div class="col-span-3 border-r p-2">
-            <div class="text-xs mb-1">Project Job No:</div>
-            <div class="border-b text-sm p-1">-</div>
-          </div>
-          <div class="col-span-3 p-2">
-            <div class="text-xs mb-1">Currency:</div>
-            <div class="border-b text-sm p-1">NGN</div>
-          </div>
-        </div>
-
-        <!-- Table Header -->
-        <div class="grid grid-cols-12 border-t bg-gray-100">
-          <div class="col-span-1 border-r p-2 text-center text-xs font-bold">S/N</div>
-          <div class="col-span-5 border-r p-2 text-xs font-bold">ITEM DESCRIPTION</div>
-          <div class="col-span-1 border-r p-2 text-center text-xs font-bold">QTY</div>
-          <div class="col-span-2 border-r p-2 text-center text-xs font-bold">UNIT COST (NGN)</div>
-          <div class="col-span-3 p-2 text-center text-xs font-bold">AMOUNT (NGN)</div>
-        </div>
-
-        <!-- Items -->
-        ${itemsHtml}
-
-        <!-- Add empty rows to fill space -->
-        ${Array.from({ length: Math.max(0, 10 - (requisition.items?.length || 0)) }, (_, i) => `
-          <div class="grid grid-cols-12 border-b">
-            <div class="col-span-1 border-r p-2 text-center text-sm">${(requisition.items?.length || 0) + i + 1}</div>
-            <div class="col-span-5 border-r p-2 text-sm">&nbsp;</div>
-            <div class="col-span-1 border-r p-2 text-center text-sm">&nbsp;</div>
-            <div class="col-span-2 border-r p-2 text-right text-sm">&nbsp;</div>
-            <div class="col-span-3 p-2 text-right text-sm">&nbsp;</div>
-          </div>
-        `).join('')}
-
-        <!-- Total -->
-        <div class="grid grid-cols-12 border-t-2 bg-gray-50">
-          <div class="col-span-9 border-r p-2 text-right text-sm font-bold">TOTAL:</div>
-          <div class="col-span-3 p-2 text-right text-sm font-bold">${formatCurrency(requisition.totalAmount || 0)}</div>
-        </div>
-
-        <!-- Approval Section -->
-        <div class="grid grid-cols-12 border-t-2">
-          <div class="col-span-4 border-r p-4 text-center">
-            <div class="text-xs font-bold mb-4">REQUESTED BY</div>
-            <div class="mb-4" style="height: 40px;"></div>
-            <div class="border-t text-xs">
-              <div>${requisition.requesterName || 'N/A'}</div>
-              <div>Date: ${formatDate(requisition.createdAt || new Date().toISOString())}</div>
+            <!-- Row 3 -->
+            <div class="grid grid-cols-12 border-b border-black">
+              <div class="col-span-6 border-r border-black p-2">
+                <div class="text-xs font-semibold mb-1">Project Title:</div>
+                <div class="text-xs">${projectTitle}</div>
+              </div>
+              <div class="col-span-6 p-2">
+                <div class="text-xs font-semibold mb-1">Project / Job No.:</div>
+                <div class="text-xs">${jobNo}</div>
+              </div>
             </div>
           </div>
-          <div class="col-span-4 border-r p-4 text-center">
-            <div class="text-xs font-bold mb-4">REVIEWED BY (PROCUREMENT)</div>
-            <div class="mb-4" style="height: 40px;"></div>
-            <div class="border-t text-xs">
-              <div>${requisition.procurementApprovedBy || 'Pending'}</div>
-              <div>Date: ${requisition.procurementApprovedAt ? formatDate(requisition.procurementApprovedAt) : 'Pending'}</div>
+
+          <!-- MATERIAL REQUIRED SECTION - EXACT TABLE -->
+          <div>
+            <!-- Section Header -->
+            <div class="bg-blue-200 p-2 border-b border-black text-center">
+              <h2 class="text-sm font-bold">MATERIAL REQUIRED</h2>
+            </div>
+
+            <!-- Currency Selector -->
+            <div class="p-2 border-b border-black">
+              <span class="text-xs font-semibold mr-2">Currency: NGN (₦)</span>
+            </div>
+
+            <!-- Table Header -->
+            <div class="grid grid-cols-12 bg-gray-100 border-b border-black text-xs font-semibold">
+              <div class="col-span-1 p-2 border-r border-black text-center">Item No.</div>
+              <div class="col-span-4 p-2 border-r border-black text-center">
+                Material Description / Part No / Specification / Local
+              </div>
+              <div class="col-span-1 p-2 border-r border-black text-center">Quantity</div>
+              <div class="col-span-2 p-2 border-r border-black text-center">Unit Cost</div>
+              <div class="col-span-2 p-2 border-r border-black text-center">Amount</div>
+              <div class="col-span-2 p-2 text-center">Remarks</div>
+            </div>
+
+            <!-- Material Rows -->
+            ${itemsHtml}
+            ${emptyRowsHtml}
+
+            <!-- Total Row -->
+            <div class="grid grid-cols-12 border-b-2 border-black bg-gray-50">
+              <div class="col-span-7"></div>
+              <div class="col-span-3 p-2 text-center font-bold text-sm">TOTAL</div>
+              <div class="col-span-2 p-2 text-right font-bold text-sm">
+                ${formatCurrency(requisition.totalAmount || 0)}
+              </div>
             </div>
           </div>
-          <div class="col-span-4 p-4 text-center">
-            <div class="text-xs font-bold mb-4">APPROVED BY (ACCOUNTS)</div>
-            <div class="mb-4" style="height: 40px;"></div>
-            <div class="border-t text-xs">
-              <div>${requisition.accountApprovedBy || 'Pending'}</div>
-              <div>Date: ${requisition.accountApprovedAt ? formatDate(requisition.accountApprovedAt) : 'Pending'}</div>
+
+          <!-- APPROVALS SECTION - EXACT MATCH TO FORM -->
+          <div>
+            <!-- Section Header -->
+            <div class="bg-blue-200 p-2 border-b border-black text-center">
+              <h2 class="text-sm font-bold">APPROVALS</h2>
+            </div>
+
+            <!-- 1. Requested By Row -->
+            <div class="grid grid-cols-12 border-b border-black text-xs">
+              <div class="col-span-4 p-2 border-r border-black">
+                <div class="font-semibold mb-1">Requested by:</div>
+                <div class="text-xs">${signatureData?.requestedBy?.name || requisition.requesterName || ''}</div>
+              </div>
+              <div class="col-span-4 p-2 border-r border-black">
+                <div class="font-semibold mb-1">Date:</div>
+                <div class="text-xs">${signatureData?.requestedBy?.date || formatDate(requisition.createdAt || new Date().toISOString())}</div>
+              </div>
+              <div class="col-span-4 p-2">
+                <div class="font-semibold mb-1">Sign:</div>
+                <div style="min-height: 3rem; display: flex; align-items: center; justify-content: flex-start;">
+                  ${signatureData?.requestedBy?.signature ? 
+                    `<img src="${signatureData.requestedBy.signature}" alt="Signature" style="max-height: 3rem; max-width: 100%; object-fit: contain;" />` :
+                    (signatureData?.requestedBy?.name || requisition.requesterName) ?
+                      '<div class="text-xs" style="color: #9ca3af;">Signed</div>' :
+                      '<div class="text-xs" style="color: #9ca3af;">Pending</div>'
+                  }
+                </div>
+              </div>
+            </div>
+
+            <!-- 2. Reviewed By Row (Procurement) -->
+            <div class="grid grid-cols-12 border-b border-black text-xs">
+              <div class="col-span-4 p-2 border-r border-black">
+                <div class="font-semibold mb-1">Reviewed by:</div>
+                <div class="text-xs">${signatureData?.reviewedBy?.name || requisition.procurementApprovedBy || ''}</div>
+              </div>
+              <div class="col-span-4 p-2 border-r border-black">
+                <div class="font-semibold mb-1">Date:</div>
+                <div class="text-xs">${signatureData?.reviewedBy?.date || (requisition.procurementApprovedAt ? formatDate(requisition.procurementApprovedAt) : '')}</div>
+              </div>
+              <div class="col-span-4 p-2">
+                <div class="font-semibold mb-1">Sign:</div>
+                <div style="min-height: 3rem; display: flex; align-items: center; justify-content: flex-start;">
+                  ${signatureData?.reviewedBy?.signature ? 
+                    `<img src="${signatureData.reviewedBy.signature}" alt="Signature" style="max-height: 3rem; max-width: 100%; object-fit: contain;" />` :
+                    (signatureData?.reviewedBy?.name || requisition.procurementApprovedBy) ? 
+                      '<div class="text-xs" style="color: #9ca3af;">Signed</div>' : 
+                      '<div class="text-xs" style="color: #9ca3af;">Pending</div>'
+                  }
+                </div>
+              </div>
+            </div>
+
+            <!-- 3. Approved By Row (Account) -->
+            <div class="grid grid-cols-12 border-b border-black text-xs">
+              <div class="col-span-4 p-2 border-r border-black">
+                <div class="font-semibold mb-1">Approved by:</div>
+                <div class="text-xs">${signatureData?.approvedBy?.name || requisition.accountApprovedBy || ''}</div>
+              </div>
+              <div class="col-span-4 p-2 border-r border-black">
+                <div class="font-semibold mb-1">Date:</div>
+                <div class="text-xs">${signatureData?.approvedBy?.date || (requisition.accountApprovedAt ? formatDate(requisition.accountApprovedAt) : '')}</div>
+              </div>
+              <div class="col-span-4 p-2">
+                <div class="font-semibold mb-1">Sign:</div>
+                <div style="min-height: 3rem; display: flex; align-items: center; justify-content: flex-start;">
+                  ${signatureData?.approvedBy?.signature ? 
+                    `<img src="${signatureData.approvedBy.signature}" alt="Signature" style="max-height: 3rem; max-width: 100%; object-fit: contain;" />` :
+                    (signatureData?.approvedBy?.name || requisition.accountApprovedBy) ? 
+                      '<div class="text-xs" style="color: #9ca3af;">Signed</div>' : 
+                      '<div class="text-xs" style="color: #9ca3af;">Pending</div>'
+                  }
+                </div>
+              </div>
             </div>
           </div>
         </div>
-      </div>
-
-      <div class="mt-4 text-center text-xs">
-        <p>Gladex Dynamic Resources Limited - Requisition Management System</p>
-        <p>Generated on ${new Date().toLocaleString('en-NG')}</p>
       </div>
     </body>
     </html>

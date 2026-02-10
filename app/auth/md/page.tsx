@@ -363,9 +363,9 @@ export default function MDAuthPage() {
                     )}
 
                     {mdExists && (
-                      <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 text-blue-700 text-sm mb-4">
+                      <div className="flex items-center gap-2 p-3 rounded-lg bg-orange-100 text-orange-700 text-sm mb-4">
                         <Shield className="h-4 w-4 flex-shrink-0" />
-                        <span>Creating a new MD account will not remove existing ones. Multiple MD accounts are allowed for backup purposes.</span>
+                        <span>Note: An MD account already exists. Creating another will replace the existing one.</span>
                       </div>
                     )}
 

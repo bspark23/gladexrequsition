@@ -28,8 +28,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Eye, Download, CheckCircle, MoreHorizontal, Trash2, FileText } from 'lucide-react'
+import { Eye, Download, CheckCircle, MoreHorizontal, Trash2, FileText, Edit } from 'lucide-react'
 import { toast } from 'sonner'
+import { RequisitionForm } from './requisition-form'
 import type { Requisition, RequisitionStatus } from '@/lib/types'
 
 interface RequisitionTableProps {
@@ -58,6 +59,7 @@ export function RequisitionTable({
 
   const [selectedRequisition, setSelectedRequisition] = useState<Requisition | null>(null)
   const [viewDialogOpen, setViewDialogOpen] = useState(false)
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [approveDialogOpen, setApproveDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
 
@@ -99,8 +101,35 @@ export function RequisitionTable({
     setViewDialogOpen(true)
   }
 
+  const handleEdit = (requisition: Requisition) => {
+    setSelectedRequisition(requisition)
+    setEditDialogOpen(true)
+  }
+
   const handleDownload = (requisition: Requisition) => {
-    generateRequisitionPDF(requisition)
+    // Create signature data from requisition for consistent PDF generation
+    // This ensures all PDF downloads across the app look exactly the same
+    // Load signatures from database
+    const signatureData = {
+      requestedBy: {
+        name: requisition.requesterName || '',
+        date: requisition.createdAt ? new Date(requisition.createdAt).toLocaleDateString('en-GB') : '',
+        signature: requisition.requesterSignature // Load from database
+      },
+      reviewedBy: requisition.procurementApprovedBy ? {
+        name: requisition.procurementApprovedBy,
+        date: requisition.procurementApprovedAt ? new Date(requisition.procurementApprovedAt).toLocaleDateString('en-GB') : '',
+        signature: requisition.procurementSignature // Load from database
+      } : undefined,
+      approvedBy: requisition.accountApprovedBy ? {
+        name: requisition.accountApprovedBy,
+        date: requisition.accountApprovedAt ? new Date(requisition.accountApprovedAt).toLocaleDateString('en-GB') : '',
+        signature: requisition.accountSignature // Load from database
+      } : undefined
+    }
+
+    // Use the same PDF generator with signature data for consistency across the entire app
+    generateRequisitionPDF(requisition, signatureData)
     toast.success(`Downloading PDF for ${requisition.requisitionNumber}`)
   }
 
@@ -204,6 +233,15 @@ export function RequisitionTable({
                         <Eye className="h-4 w-4 mr-2" />
                         View Details
                       </DropdownMenuItem>
+                      {/* Show Edit option for procurement/account users and MD */}
+                      {((currentUser?.department === 'Procurement' && requisition.status === 'Pending Procurement') ||
+                        (currentUser?.department === 'Accounts' && requisition.status === 'Pending Account') ||
+                        currentUser?.role === 'md') && (
+                        <DropdownMenuItem onClick={() => handleEdit(requisition)}>
+                          <Edit className="h-4 w-4 mr-2" />
+                          Edit & Approve
+                        </DropdownMenuItem>
+                      )}
                       <DropdownMenuItem onClick={() => handleDownload(requisition)}>
                         <Download className="h-4 w-4 mr-2" />
                         Download PDF
@@ -240,6 +278,77 @@ export function RequisitionTable({
           </TableBody>
         </Table>
       </div>
+
+      {/* Edit Dialog with RequisitionForm */}
+      {selectedRequisition && (
+        <RequisitionForm
+          trigger={null}
+          open={editDialogOpen}
+          onOpenChange={(open) => {
+            setEditDialogOpen(open)
+            if (!open) {
+              setSelectedRequisition(null)
+            }
+          }}
+          initialData={{
+            id: selectedRequisition.id,
+            docNo: 'GDRL-PL-QF-005',
+            revDate: '26.06.2024',
+            dateOfRequest: selectedRequisition.createdAt ? new Date(selectedRequisition.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+            client: '',
+            requisitionNo: selectedRequisition.requisitionNumber || '',
+            requestedBy: selectedRequisition.requesterName || '',
+            requestedById: selectedRequisition.requesterId || '',
+            department: selectedRequisition.requesterDepartment || '',
+            projectTitle: selectedRequisition.purpose?.split('|')[0]?.replace('Project: ', '') || '',
+            projectJobNo: selectedRequisition.purpose?.split('|')[1]?.replace(' Job No: ', '') || '',
+            currency: 'NGN',
+            materials: selectedRequisition.items?.map((item, index) => ({
+              id: item.id || index.toString(),
+              itemNo: index + 1,
+              description: item.description || '',
+              quantity: item.quantity || 0,
+              unitCost: item.unitPrice || 0,
+              amount: item.totalPrice || 0,
+              remarks: ''
+            })) || [],
+            total: selectedRequisition.totalAmount || 0,
+            approvals: {
+              requestedBy: {
+                name: selectedRequisition.requesterName || '',
+                date: selectedRequisition.createdAt ? new Date(selectedRequisition.createdAt).toISOString().split('T')[0] : '',
+                signature: selectedRequisition.requesterSignature || '' // Load signature from database
+              },
+              reviewedBy: selectedRequisition.procurementApprovedBy ? {
+                name: selectedRequisition.procurementApprovedBy,
+                date: selectedRequisition.procurementApprovedAt ? new Date(selectedRequisition.procurementApprovedAt).toISOString().split('T')[0] : '',
+                signature: selectedRequisition.procurementSignature || '' // Load signature from database
+              } : null,
+              approvedBy: selectedRequisition.accountApprovedBy ? {
+                name: selectedRequisition.accountApprovedBy,
+                date: selectedRequisition.accountApprovedAt ? new Date(selectedRequisition.accountApprovedAt).toISOString().split('T')[0] : '',
+                signature: selectedRequisition.accountSignature || '' // Load signature from database
+              } : null
+            },
+            status: selectedRequisition.status === 'Pending Procurement' ? 'requested' : 
+                   selectedRequisition.status === 'Pending Account' ? 'reviewed' : 'approved',
+            createdAt: selectedRequisition.createdAt || new Date().toISOString(),
+            updatedAt: selectedRequisition.updatedAt || new Date().toISOString()
+          }}
+          readOnly={false}
+          userRole={
+            currentUser?.role === 'md' ? 'md' :
+            currentUser?.department === 'Procurement' ? 'procurement' :
+            currentUser?.department === 'Accounts' ? 'accounts' :
+            'staff'
+          }
+          onApprovalAction={async (action) => {
+            // Refresh the data after approval
+            setEditDialogOpen(false)
+            setSelectedRequisition(null)
+          }}
+        />
+      )}
 
       {/* View Dialog */}
       <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>

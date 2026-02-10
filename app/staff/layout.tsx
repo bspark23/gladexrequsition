@@ -19,8 +19,10 @@ export default function StaffLayout({
   const [hasRedirected, setHasRedirected] = useState(false)
 
   useEffect(() => {
-    // TEMPORARILY DISABLE ALL REDIRECTS TO STOP THE LOOP
-    console.log('StaffLayout - User check (redirects disabled):', {
+    // Only redirect once and when not loading
+    if (isLoading || hasRedirected) return
+    
+    console.log('StaffLayout - Checking user:', {
       currentUser: currentUser ? {
         id: currentUser.id,
         role: currentUser.role,
@@ -31,8 +33,6 @@ export default function StaffLayout({
       hasRedirected
     })
     
-    // TODO: Re-enable redirects after debugging
-    /*
     if (!currentUser) {
       console.log('StaffLayout - No user, redirecting to home')
       setHasRedirected(true)
@@ -44,7 +44,6 @@ export default function StaffLayout({
     } else {
       console.log('StaffLayout - Staff user confirmed, staying on staff dashboard. Role:', currentUser.role)
     }
-    */
   }, [currentUser, isLoading, router, hasRedirected])
 
   // Show loading while checking authentication

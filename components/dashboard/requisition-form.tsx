@@ -14,8 +14,9 @@ import {
   SheetTrigger,
   SheetFooter,
 } from '@/components/ui/sheet'
-import { Plus, Minus, FilePlus, Download, Save, Upload, X } from 'lucide-react'
+import { Plus, Minus, FilePlus, Download, Upload, X, CheckCircle, Clock } from 'lucide-react'
 import { toast } from 'sonner'
+import { generateRequisitionPDF } from '@/lib/pdf-generator'
 import type { RequisitionStatus } from '@/lib/types'
 
 interface MaterialItem {
@@ -64,35 +65,35 @@ interface RequisitionFormProps {
   initialData?: MaterialRequisitionData
   readOnly?: boolean
   userRole?: 'staff' | 'procurement' | 'accounts' | 'md'
+  onApprovalAction?: (action: 'approve-procurement' | 'approve-account') => Promise<void>
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }
 
 export function RequisitionForm({ 
   trigger, 
   initialData, 
   readOnly = false, 
-  userRole = 'staff' 
+  userRole = 'staff',
+  onApprovalAction,
+  open: externalOpen,
+  onOpenChange: externalOnOpenChange
 }: RequisitionFormProps) {
-  const { currentUser, addRequisition } = useData()  // Use DataContext for consistency
+  const { currentUser, addRequisition, approveAsProcurement, approveAsAccount, updateRequisition, requisitions } = useData()  // Use DataContext for consistency
   
-  // Debug logging
-  useEffect(() => {
-    console.log('RequisitionForm - currentUser from DataContext:', currentUser)
-    console.log('RequisitionForm - addRequisition function:', typeof addRequisition)
-    
-    // Check localStorage
-    const storedUser = localStorage.getItem('gladex_current_user')
-    console.log('RequisitionForm - localStorage user:', storedUser)
-    if (storedUser) {
-      try {
-        const parsedUser = JSON.parse(storedUser)
-        console.log('RequisitionForm - parsed localStorage user:', parsedUser)
-      } catch (e) {
-        console.error('RequisitionForm - error parsing localStorage user:', e)
-      }
-    }
-  }, [currentUser, addRequisition])
+  // Determine user role from current user if not explicitly provided
+  const effectiveUserRole = userRole !== 'staff' ? userRole : 
+    currentUser?.role === 'md' ? 'md' :
+    currentUser?.department === 'Procurement' ? 'procurement' :
+    currentUser?.department === 'Accounts' ? 'accounts' :
+    'staff'
   const [open, setOpen] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isApproving, setIsApproving] = useState(false)
+
+  // Use external control if provided, otherwise use internal state
+  const isOpen = externalOpen !== undefined ? externalOpen : open
+  const setIsOpen = externalOnOpenChange || setOpen
 
   // Don't render the form if user is not loaded yet
   if (!currentUser) {
@@ -105,19 +106,30 @@ export function RequisitionForm({
     )
   }
 
-  // Generate requisition number
-  const generateRequisitionNo = () => {
-    const year = new Date().getFullYear()
-    const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
-    return `GDRL-PL-MRF-${random}`
+  // Generate next requisition number for display
+  const getNextRequisitionNumber = () => {
+    let maxNumber = 0
+    
+    requisitions.forEach(req => {
+      const match = req.requisitionNumber.match(/(\d+)$/)
+      if (match) {
+        const num = parseInt(match[1], 10)
+        if (num > maxNumber) {
+          maxNumber = num
+        }
+      }
+    })
+    
+    const nextNumber = (maxNumber + 1).toString().padStart(2, '0')
+    return `GDRL-PL-MRF-${nextNumber}`
   }
 
   const [formData, setFormData] = useState<MaterialRequisitionData>(() => ({
     docNo: 'GDRL-PL-QF-005',
     revDate: '26.06.2024',
-    dateOfRequest: new Date().toLocaleDateString('en-GB'),
+    dateOfRequest: new Date().toISOString().split('T')[0],
     client: '',
-    requisitionNo: generateRequisitionNo(),
+    requisitionNo: initialData?.requisitionNo || getNextRequisitionNumber(),
     requestedBy: currentUser?.name || '',
     requestedById: currentUser?.id || '',
     department: currentUser?.department || '',
@@ -146,6 +158,26 @@ export function RequisitionForm({
     updatedAt: new Date().toISOString(),
     ...initialData
   }))
+
+  // Debug logging for approval workflow
+  useEffect(() => {
+    console.log('RequisitionForm - Approval Debug:', {
+      currentUser: currentUser ? {
+        id: currentUser.id,
+        name: currentUser.name,
+        role: currentUser.role,
+        department: currentUser.department
+      } : null,
+      userRole,
+      effectiveUserRole,
+      readOnly,
+      initialData: initialData ? {
+        id: initialData.id,
+        status: initialData.status
+      } : null,
+      formDataApprovals: formData.approvals
+    })
+  }, [currentUser, userRole, effectiveUserRole, readOnly, initialData, formData.approvals])
 
   // Calculate amount for each material item
   const calculateAmount = useCallback((quantity: number, unitCost: number) => {
@@ -253,122 +285,130 @@ export function RequisitionForm({
 
   // Can edit approval section
   const canEditApproval = (approvalType: keyof typeof formData.approvals) => {
+    const canEdit = (() => {
+      if (readOnly) return false
+      
+      switch (approvalType) {
+        case 'requestedBy':
+          // ANY user can be a requester - Staff, Procurement, Account, or MD
+          // They can edit during creation or if MD is editing existing requisition
+          return (effectiveUserRole === 'md') || 
+                 (!formData.approvals.requestedBy && !initialData) || // During new requisition creation
+                 (effectiveUserRole === 'procurement' && !formData.approvals.requestedBy && !initialData) ||
+                 (effectiveUserRole === 'accounts' && !formData.approvals.requestedBy && !initialData) ||
+                 (effectiveUserRole === 'staff' && !formData.approvals.requestedBy && !initialData)
+        case 'reviewedBy':
+          // Procurement users and MD can edit this section
+          return (effectiveUserRole === 'procurement' || effectiveUserRole === 'md')
+        case 'approvedBy':
+          // Account users and MD can edit this section  
+          return (effectiveUserRole === 'accounts' || effectiveUserRole === 'md')
+        default:
+          return false
+      }
+    })()
+
+    console.log(`canEditApproval(${approvalType}):`, {
+      result: canEdit,
+      readOnly,
+      effectiveUserRole,
+      approvalType,
+      requestedBy: formData.approvals.requestedBy,
+      reviewedBy: formData.approvals.reviewedBy,
+      approvedBy: formData.approvals.approvedBy
+    })
+
+    return canEdit
+  }
+
+  // Can approve at specific stage
+  const canApproveAtStage = (stage: 'procurement' | 'account') => {
     if (readOnly) return false
     
-    switch (approvalType) {
-      case 'requestedBy':
-        return userRole === 'staff' && !formData.approvals.requestedBy
-      case 'reviewedBy':
-        return (userRole === 'procurement' || userRole === 'md') && 
-               formData.approvals.requestedBy && !formData.approvals.reviewedBy
-      case 'approvedBy':
-        return (userRole === 'accounts' || userRole === 'md') && 
-               formData.approvals.reviewedBy && !formData.approvals.approvedBy
+    switch (stage) {
+      case 'procurement':
+        return (effectiveUserRole === 'procurement' || effectiveUserRole === 'md') && 
+               formData.approvals.requestedBy && 
+               formData.approvals.reviewedBy?.name && 
+               formData.approvals.reviewedBy?.date && 
+               formData.approvals.reviewedBy?.signature
+      case 'account':
+        return (effectiveUserRole === 'accounts' || effectiveUserRole === 'md') && 
+               formData.approvals.reviewedBy && 
+               formData.approvals.approvedBy?.name && 
+               formData.approvals.approvedBy?.date && 
+               formData.approvals.approvedBy?.signature
       default:
         return false
     }
   }
 
-  // Generate PDF
+  // Check if approval details are complete but not yet approved
+  const hasApprovalDetails = (approvalType: 'reviewedBy' | 'approvedBy') => {
+    const approval = formData.approvals[approvalType]
+    return approval?.name && approval?.date && approval?.signature
+  }
+
+  // Generate PDF using the standardized PDF generator
   const generatePDF = () => {
-    const formElement = document.getElementById('material-requisition-form')
-    if (!formElement) {
-      toast.error('Form not found')
-      return
+    // Convert form data to Requisition format for consistent PDF generation
+    const requisitionForPDF = {
+      id: initialData?.id || 'temp-id',
+      requisitionNumber: formData.requisitionNo,
+      requesterId: formData.requestedById || currentUser?.id || '',
+      requesterName: formData.requestedBy || currentUser?.name || '',
+      requesterDepartment: (currentUser?.role === 'md' ? 'Managing Director' : (formData.department || currentUser?.department || 'Unknown')) as any,
+      items: formData.materials.filter(m => m.description.trim()).map(material => ({
+        id: material.id,
+        description: material.description,
+        quantity: material.quantity,
+        unitPrice: material.unitCost,
+        totalPrice: material.amount
+      })),
+      totalAmount: formData.total,
+      status: (formData.status === 'draft' ? 'Pending Procurement' : 
+              formData.status === 'requested' ? 'Pending Procurement' :
+              formData.status === 'reviewed' ? 'Pending Account' : 'Approved') as any,
+      purpose: [
+        `Project: ${formData.projectTitle}`,
+        formData.projectJobNo && `Job No: ${formData.projectJobNo}`,
+        formData.client && `Client: ${formData.client}`,
+        `Currency: ${formData.currency}`,
+        `Doc No: ${formData.docNo}`
+      ].filter(Boolean).join(' | '),
+      createdAt: formData.createdAt || new Date().toISOString(),
+      updatedAt: formData.updatedAt || new Date().toISOString(),
+      // Map approval data from form to requisition format
+      procurementApprovedBy: formData.approvals.reviewedBy?.name || undefined,
+      procurementApprovedAt: formData.approvals.reviewedBy?.date ? 
+        new Date(formData.approvals.reviewedBy.date).toISOString() : undefined,
+      accountApprovedBy: formData.approvals.approvedBy?.name || undefined,
+      accountApprovedAt: formData.approvals.approvedBy?.date ? 
+        new Date(formData.approvals.approvedBy.date).toISOString() : undefined,
     }
 
-    // Create print window
-    const printWindow = window.open('', '_blank')
-    if (!printWindow) {
-      toast.error('Could not open print window')
-      return
+    // Pass signature data to PDF generator for consistent rendering
+    const signatureData = {
+      requestedBy: formData.approvals.requestedBy ? {
+        name: formData.approvals.requestedBy.name,
+        date: formData.approvals.requestedBy.date,
+        signature: formData.approvals.requestedBy.signature
+      } : undefined,
+      reviewedBy: formData.approvals.reviewedBy ? {
+        name: formData.approvals.reviewedBy.name,
+        date: formData.approvals.reviewedBy.date,
+        signature: formData.approvals.reviewedBy.signature
+      } : undefined,
+      approvedBy: formData.approvals.approvedBy ? {
+        name: formData.approvals.approvedBy.name,
+        date: formData.approvals.approvedBy.date,
+        signature: formData.approvals.approvedBy.signature
+      } : undefined
     }
 
-    // Clone form and prepare for PDF
-    const clonedForm = formElement.cloneNode(true) as HTMLElement
-    
-    // Remove interactive elements
-    const buttons = clonedForm.querySelectorAll('button')
-    buttons.forEach(btn => btn.remove())
-    
-    const fileInputs = clonedForm.querySelectorAll('input[type="file"]')
-    fileInputs.forEach(input => input.remove())
-
-    const printDocument = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <title>Material Requisition Form - ${formData.requisitionNo}</title>
-        <style>
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { 
-            font-family: Arial, sans-serif; 
-            background: white; 
-            color: black; 
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
-          }
-          @page { size: A4; margin: 0.5in; }
-          @media print {
-            body { background: white !important; color: black !important; }
-            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-          }
-          .border-2 { border: 2px solid black; }
-          .border { border: 1px solid black; }
-          .border-b-2 { border-bottom: 2px solid black; }
-          .border-b { border-bottom: 1px solid black; }
-          .border-r-2 { border-right: 2px solid black; }
-          .border-r { border-right: 1px solid black; }
-          .grid { display: grid; }
-          .grid-cols-12 { grid-template-columns: repeat(12, minmax(0, 1fr)); }
-          .col-span-1 { grid-column: span 1; }
-          .col-span-2 { grid-column: span 2; }
-          .col-span-3 { grid-column: span 3; }
-          .col-span-4 { grid-column: span 4; }
-          .col-span-6 { grid-column: span 6; }
-          .col-span-7 { grid-column: span 7; }
-          .p-1 { padding: 0.25rem; }
-          .p-2 { padding: 0.5rem; }
-          .p-4 { padding: 1rem; }
-          .text-xs { font-size: 0.75rem; }
-          .text-sm { font-size: 0.875rem; }
-          .text-xl { font-size: 1.25rem; }
-          .font-bold { font-weight: 700; }
-          .font-semibold { font-weight: 600; }
-          .text-center { text-align: center; }
-          .text-right { text-align: right; }
-          .bg-blue-200 { background-color: #dbeafe !important; }
-          .bg-gray-100 { background-color: #f3f4f6 !important; }
-          .bg-gray-50 { background-color: #f9fafb !important; }
-          .flex { display: flex; }
-          .items-center { align-items: center; }
-          .justify-center { justify-content: center; }
-          .h-16 { height: 4rem; }
-          .w-auto { width: auto; }
-          .max-h-12 { max-height: 3rem; }
-          .max-w-full { max-width: 100%; }
-          .object-contain { object-fit: contain; }
-          .mb-1 { margin-bottom: 0.25rem; }
-          input, select, textarea { border: none; background: transparent; font-size: inherit; font-family: inherit; }
-          .print-hidden { display: none !important; }
-        </style>
-      </head>
-      <body>
-        ${clonedForm.outerHTML}
-      </body>
-      </html>
-    `
-
-    printWindow.document.write(printDocument)
-    printWindow.document.close()
-    
-    printWindow.onload = () => {
-      setTimeout(() => {
-        printWindow.print()
-        printWindow.close()
-      }, 500)
-    }
+    // Use the standardized PDF generator with signature data for consistency
+    generateRequisitionPDF(requisitionForPDF, signatureData)
+    toast.success(`Downloading PDF for ${formData.requisitionNo}`)
   }
 
   const handleSubmit = async () => {
@@ -410,6 +450,29 @@ export function RequisitionForm({
     setIsSubmitting(true)
 
     try {
+      // If editing existing requisition, update it with signatures
+      if (initialData?.id) {
+        const updates: any = {
+          updatedAt: new Date().toISOString()
+        }
+        
+        // Only add signature fields if they exist (Firebase doesn't allow undefined)
+        if (formData.approvals.requestedBy?.signature) {
+          updates.requesterSignature = formData.approvals.requestedBy.signature
+        }
+        if (formData.approvals.reviewedBy?.signature) {
+          updates.procurementSignature = formData.approvals.reviewedBy.signature
+        }
+        if (formData.approvals.approvedBy?.signature) {
+          updates.accountSignature = formData.approvals.approvedBy.signature
+        }
+        
+        await updateRequisition(initialData.id, updates)
+        toast.success('Requisition updated successfully')
+        setIsOpen(false)
+        return
+      }
+
       // Convert MaterialRequisitionData to the existing Requisition format
       const requisitionItems = validMaterials.map((material) => ({
         id: material.id,
@@ -431,14 +494,25 @@ export function RequisitionForm({
       ].filter(Boolean).join(' | ')
 
       // Create requisition using existing data context - matching exact interface
-      const requisitionData = {
+      const requisitionData: any = {
         requesterId: currentUser.id,
         requesterName: currentUser.name || 'Unknown User',
-        requesterDepartment: currentUser.role === 'md' ? 'MD' : (currentUser.department || 'Unknown'),
+        requesterDepartment: (currentUser.role === 'md' ? 'Managing Director' : (currentUser.department || 'Unknown')) as any,
         items: requisitionItems,
         totalAmount: formData.total,
         status: 'Pending Procurement' as RequisitionStatus,
         purpose: purposeText
+      }
+
+      // Only add signature fields if they exist (Firebase doesn't allow undefined)
+      if (formData.approvals.requestedBy?.signature) {
+        requisitionData.requesterSignature = formData.approvals.requestedBy.signature
+      }
+      if (formData.approvals.reviewedBy?.signature) {
+        requisitionData.procurementSignature = formData.approvals.reviewedBy.signature
+      }
+      if (formData.approvals.approvedBy?.signature) {
+        requisitionData.accountSignature = formData.approvals.approvedBy.signature
       }
 
       console.log('About to save requisition:', requisitionData)
@@ -467,14 +541,13 @@ export function RequisitionForm({
       
       console.log('Form save successful, closing form...')
       
-      // Reset form to initial state
-      const newReqNo = generateRequisitionNo()
+      // Reset form to initial state with next requisition number
       setFormData({
         docNo: 'GDRL-PL-QF-005',
         revDate: '26.06.2024',
         dateOfRequest: new Date().toLocaleDateString('en-GB'),
         client: '',
-        requisitionNo: newReqNo,
+        requisitionNo: getNextRequisitionNumber(),
         requestedBy: currentUser?.name || '',
         requestedById: currentUser?.id || '',
         department: currentUser?.department || '',
@@ -503,12 +576,40 @@ export function RequisitionForm({
         updatedAt: new Date().toISOString()
       })
       
-      setOpen(false)
+      setIsOpen(false)
     } catch (error) {
       console.error('Save error:', error)
       toast.error(`Failed to save requisition: ${error}`)
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  // Handle approval actions
+  const handleApprovalAction = async (action: 'approve-procurement' | 'approve-account') => {
+    if (!currentUser || !initialData?.id) return
+
+    setIsApproving(true)
+    try {
+      if (action === 'approve-procurement') {
+        await approveAsProcurement(initialData.id, currentUser.id, currentUser.name || 'Unknown User')
+        toast.success('Procurement approved successfully')
+      } else if (action === 'approve-account') {
+        await approveAsAccount(initialData.id, currentUser.id, currentUser.name || 'Unknown User')
+        toast.success('Account approved successfully')
+      }
+
+      // Call external handler if provided
+      if (onApprovalAction) {
+        await onApprovalAction(action)
+      }
+
+      setIsOpen(false)
+    } catch (error) {
+      console.error('Approval error:', error)
+      toast.error(`Failed to ${action.replace('-', ' ')}: ${error}`)
+    } finally {
+      setIsApproving(false)
     }
   }
 
@@ -531,9 +632,45 @@ export function RequisitionForm({
         .sheet-overlay {
           display: none !important;
         }
+
+        /* Approval workflow animations */
+        @keyframes fade-in {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes pulse-soft {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.7; }
+        }
+
+        .animate-in {
+          animation: fade-in 0.3s ease-out;
+        }
+
+        .animate-pulse {
+          animation: pulse-soft 2s infinite;
+        }
+
+        /* Button hover animations */
+        .hover\\:scale-105:hover {
+          transform: scale(1.05);
+        }
+
+        /* Focus animations for inputs */
+        .focus\\:bg-blue-50:focus {
+          background-color: #eff6ff;
+          transition: background-color 0.2s ease;
+        }
+
+        /* Signature hover effect */
+        .hover\\:scale-105:hover {
+          transform: scale(1.05);
+          transition: transform 0.2s ease;
+        }
       `}</style>
       
-      <Sheet open={open} onOpenChange={setOpen}>
+      <Sheet open={isOpen} onOpenChange={setIsOpen}>
       <SheetTrigger asChild>
         {trigger || (
           <Button className="bg-[oklch(0.65_0.18_45)] hover:bg-[oklch(0.6_0.18_45)] text-white">
@@ -563,7 +700,7 @@ export function RequisitionForm({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setOpen(false)}
+            onClick={() => setIsOpen(false)}
             className="absolute top-4 right-4 z-10 h-8 w-8 p-0 rounded-full bg-gray-100 hover:bg-gray-200"
           >
             <X className="h-4 w-4" />
@@ -668,7 +805,7 @@ export function RequisitionForm({
                   <div className="col-span-6 p-2">
                     <label className="text-xs font-semibold block mb-1">Department:</label>
                     <div className="text-xs bg-gray-100 p-1">
-                      {currentUser?.role === 'md' ? 'MD' : (formData.department || 'Unknown')}
+                      {currentUser?.role === 'md' ? 'Managing Director' : (formData.department || 'Unknown')}
                     </div>
                   </div>
                 </div>
@@ -827,13 +964,29 @@ export function RequisitionForm({
 
                 {/* Approval Rows */}
                 {[
-                  { key: 'requestedBy' as const, label: 'Requested by:' },
-                  { key: 'reviewedBy' as const, label: 'Reviewed by:' },
-                  { key: 'approvedBy' as const, label: 'Approved by:' }
-                ].map(({ key, label }) => (
-                  <div key={key} className="grid grid-cols-12 border-b border-black text-xs">
+                  { key: 'requestedBy' as const, label: 'Requested by:', stage: null },
+                  { key: 'reviewedBy' as const, label: 'Reviewed by:', stage: 'procurement' as const },
+                  { key: 'approvedBy' as const, label: 'Approved by:', stage: 'account' as const }
+                ].map(({ key, label, stage }) => (
+                  <div key={key} className="grid grid-cols-12 border-b border-black text-xs relative">
+                    {/* Visual indicator for approval details added */}
+                    {stage && hasApprovalDetails(key) && (
+                      <div className="absolute -left-2 top-1/2 transform -translate-y-1/2 z-10">
+                        <div className="w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center animate-pulse">
+                          <CheckCircle className="h-2.5 w-2.5 text-white" />
+                        </div>
+                      </div>
+                    )}
+                    
                     <div className="col-span-4 p-2 border-r border-black">
-                      <div className="font-semibold mb-1">{label}</div>
+                      <div className="font-semibold mb-1 flex items-center gap-2">
+                        {label}
+                        {stage && hasApprovalDetails(key) && (
+                          <span className="text-blue-600 text-xs bg-blue-100 px-1 py-0.5 rounded animate-in fade-in duration-300">
+                            Details Added
+                          </span>
+                        )}
+                      </div>
                       {canEditApproval(key) ? (
                         <Input
                           value={formData.approvals[key]?.name || ''}
@@ -847,7 +1000,7 @@ export function RequisitionForm({
                               }
                             }))
                           }}
-                          className="border-0 p-0 h-auto text-xs"
+                          className="border-0 p-0 h-auto text-xs transition-all duration-200 focus:bg-blue-50"
                           placeholder="Name"
                         />
                       ) : (
@@ -870,7 +1023,7 @@ export function RequisitionForm({
                               }
                             }))
                           }}
-                          className="border-0 p-0 h-auto text-xs"
+                          className="border-0 p-0 h-auto text-xs transition-all duration-200 focus:bg-blue-50"
                         />
                       ) : (
                         <div className="text-xs">{formData.approvals[key]?.date || ''}</div>
@@ -879,11 +1032,16 @@ export function RequisitionForm({
                     <div className="col-span-4 p-2">
                       <div className="font-semibold mb-1">Sign:</div>
                       {formData.approvals[key]?.signature ? (
-                        <img 
-                          src={formData.approvals[key]?.signature} 
-                          alt="Signature" 
-                          className="max-h-12 max-w-full object-contain"
-                        />
+                        <div className="relative">
+                          <img 
+                            src={formData.approvals[key]?.signature} 
+                            alt="Signature" 
+                            className="max-h-12 max-w-full object-contain transition-all duration-200 hover:scale-105"
+                          />
+                          {stage && hasApprovalDetails(key) && (
+                            <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full animate-pulse" />
+                          )}
+                        </div>
                       ) : canEditApproval(key) ? (
                         <div className="print-hidden">
                           <input
@@ -898,13 +1056,25 @@ export function RequisitionForm({
                             className="text-xs hidden"
                             id={`signature-${key}`}
                           />
-                          <label htmlFor={`signature-${key}`} className="cursor-pointer text-xs flex items-center">
+                          <label 
+                            htmlFor={`signature-${key}`} 
+                            className="cursor-pointer text-xs flex items-center transition-all duration-200 hover:text-blue-600 hover:bg-blue-50 p-1 rounded"
+                          >
                             <Upload className="h-4 w-4 mr-1" />
                             Upload Signature
                           </label>
                         </div>
                       ) : (
-                        <div className="text-xs text-gray-400">Pending</div>
+                        <div className="text-xs text-gray-400 flex items-center">
+                          {formData.approvals[key]?.name ? (
+                            <span>Signed</span>
+                          ) : (
+                            <>
+                              <Clock className="h-3 w-3 mr-1" />
+                              Pending
+                            </>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -918,7 +1088,8 @@ export function RequisitionForm({
             <Button
               type="button"
               variant="outline"
-              onClick={() => setOpen(false)}
+              onClick={() => setIsOpen(false)}
+              className="transition-all duration-200 hover:scale-105"
             >
               <X className="h-4 w-4 mr-2" />
               Cancel
@@ -927,17 +1098,58 @@ export function RequisitionForm({
               type="button"
               variant="outline"
               onClick={generatePDF}
+              className="transition-all duration-200 hover:scale-105"
             >
               <Download className="h-4 w-4 mr-2" />
               Download PDF
             </Button>
-            <Button
-              onClick={handleSubmit}
-              disabled={isSubmitting}
-              className="bg-[oklch(0.65_0.18_45)] hover:bg-[oklch(0.6_0.18_45)] text-white"
-            >
-              {isSubmitting ? 'Saving...' : 'Save Requisition'}
-            </Button>
+            
+            {/* Conditional action buttons based on user role and form state */}
+            {!initialData ? (
+              // New requisition - show save button
+              <Button
+                onClick={handleSubmit}
+                disabled={isSubmitting}
+                className="bg-[oklch(0.65_0.18_45)] hover:bg-[oklch(0.6_0.18_45)] text-white transition-all duration-200 hover:scale-105"
+              >
+                {isSubmitting ? 'Saving...' : 'Save Requisition'}
+              </Button>
+            ) : (
+              // Existing requisition - show edit/approve buttons
+              <div className="flex gap-2">
+                {/* Save/Edit button - always available for editing details */}
+                <Button
+                  onClick={handleSubmit}
+                  disabled={isSubmitting}
+                  variant="outline"
+                  className="transition-all duration-200 hover:scale-105"
+                >
+                  {isSubmitting ? 'Saving...' : 'Save Changes'}
+                </Button>
+                
+                {/* Procurement Approve button */}
+                {canApproveAtStage('procurement') && (
+                  <Button
+                    onClick={() => handleApprovalAction('approve-procurement')}
+                    disabled={isApproving}
+                    className="bg-blue-600 hover:bg-blue-700 text-white transition-all duration-200 hover:scale-105 animate-in fade-in duration-300"
+                  >
+                    {isApproving ? 'Approving...' : 'Approve Procurement'}
+                  </Button>
+                )}
+                
+                {/* Account Approve button */}
+                {canApproveAtStage('account') && (
+                  <Button
+                    onClick={() => handleApprovalAction('approve-account')}
+                    disabled={isApproving}
+                    className="bg-green-600 hover:bg-green-700 text-white transition-all duration-200 hover:scale-105 animate-in fade-in duration-300"
+                  >
+                    {isApproving ? 'Approving...' : 'Final Approve'}
+                  </Button>
+                )}
+              </div>
+            )}
           </SheetFooter>
         </div>
       </SheetContent>

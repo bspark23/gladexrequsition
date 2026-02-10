@@ -26,10 +26,26 @@ interface DataContextType {
 
 const DataContext = createContext<DataContextType | null>(null)
 
-function generateRequisitionNumber(): string {
+async function generateRequisitionNumber(db: any, requisitions: Requisition[]): Promise<string> {
   const year = new Date().getFullYear()
-  const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
-  return `REQ-${year}-${random}`
+  
+  // Find the highest number used so far by parsing all existing requisition numbers
+  let maxNumber = 0
+  
+  requisitions.forEach(req => {
+    // Extract number from format: GDRL-PL-MRF-XXXX or REQ-YYYY-XXXX
+    const match = req.requisitionNumber.match(/(\d+)$/)
+    if (match) {
+      const num = parseInt(match[1], 10)
+      if (num > maxNumber) {
+        maxNumber = num
+      }
+    }
+  })
+  
+  // Next number is maxNumber + 1
+  const nextNumber = (maxNumber + 1).toString().padStart(2, '0')
+  return `GDRL-PL-MRF-${nextNumber}`
 }
 
 export function DataProvider({ children }: { children: React.ReactNode }) {
@@ -186,16 +202,26 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     requisitionData: Omit<Requisition, 'id' | 'requisitionNumber' | 'createdAt' | 'updatedAt'>
   ): Promise<Requisition> => {
     try {
+      console.log('DataContext - addRequisition called with:', requisitionData)
+      
       const now = new Date().toISOString()
+      
+      // Generate sequential requisition number based on existing requisitions
+      const requisitionNumber = await generateRequisitionNumber(db, requisitions)
+      
       const newRequisition = {
         ...requisitionData,
-        requisitionNumber: generateRequisitionNumber(),
+        requisitionNumber,
         createdAt: now,
         updatedAt: now,
       }
       
+      console.log('DataContext - About to save to Firebase:', newRequisition)
+      
       const docRef = await addDoc(collection(db, 'requisitions'), newRequisition)
       const requisition = { id: docRef.id, ...newRequisition }
+      
+      console.log('DataContext - Saved to Firebase successfully:', requisition)
       
       // Add activity log
       await addActivity({
@@ -207,12 +233,13 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         details: `Created requisition for ${(requisitionData.totalAmount || 0).toLocaleString('en-NG', { style: 'currency', currency: 'NGN' })}`,
       })
       
+      console.log('DataContext - Activity log added, returning requisition')
       return requisition
     } catch (error) {
       console.error('Error adding requisition:', error)
       throw error
     }
-  }, [addActivity])
+  }, [addActivity, requisitions])
 
   const updateRequisition = useCallback(async (id: string, updates: Partial<Requisition>) => {
     try {
@@ -257,14 +284,29 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
   const approveAsProcurement = useCallback(async (requisitionId: string, approverId: string, approverName: string) => {
     try {
+      console.log('DataContext - approveAsProcurement called:', { requisitionId, approverId, approverName })
+      
       const requisition = requisitions.find(r => r.id === requisitionId)
-      if (!requisition) return
+      if (!requisition) {
+        console.error('DataContext - Requisition not found:', requisitionId)
+        throw new Error('Requisition not found')
+      }
 
-      await updateRequisition(requisitionId, {
-        status: 'Pending Account',
+      console.log('DataContext - Found requisition:', requisition)
+      console.log('DataContext - Current status:', requisition.status)
+
+      const updates = {
+        status: 'Pending Account' as RequisitionStatus,
         procurementApprovedBy: approverName,
         procurementApprovedAt: new Date().toISOString(),
-      })
+        updatedAt: new Date().toISOString()
+      }
+
+      console.log('DataContext - Updating with:', updates)
+
+      await updateDoc(doc(db, 'requisitions', requisitionId), updates)
+
+      console.log('DataContext - Firebase update completed')
 
       await addActivity({
         action: 'Procurement Approved',
@@ -274,22 +316,39 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         requisitionNumber: requisition.requisitionNumber,
         details: `Approved procurement for ${requisition.requisitionNumber}`,
       })
+
+      console.log('DataContext - Activity log added')
     } catch (error) {
       console.error('Error approving procurement:', error)
       throw error
     }
-  }, [requisitions, updateRequisition, addActivity])
+  }, [requisitions, addActivity])
 
   const approveAsAccount = useCallback(async (requisitionId: string, approverId: string, approverName: string) => {
     try {
+      console.log('DataContext - approveAsAccount called:', { requisitionId, approverId, approverName })
+      
       const requisition = requisitions.find(r => r.id === requisitionId)
-      if (!requisition) return
+      if (!requisition) {
+        console.error('DataContext - Requisition not found:', requisitionId)
+        throw new Error('Requisition not found')
+      }
 
-      await updateRequisition(requisitionId, {
-        status: 'Approved',
+      console.log('DataContext - Found requisition:', requisition)
+      console.log('DataContext - Current status:', requisition.status)
+
+      const updates = {
+        status: 'Approved' as RequisitionStatus,
         accountApprovedBy: approverName,
         accountApprovedAt: new Date().toISOString(),
-      })
+        updatedAt: new Date().toISOString()
+      }
+
+      console.log('DataContext - Updating with:', updates)
+
+      await updateDoc(doc(db, 'requisitions', requisitionId), updates)
+
+      console.log('DataContext - Firebase update completed')
 
       await addActivity({
         action: 'Account Approved',
@@ -299,11 +358,13 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         requisitionNumber: requisition.requisitionNumber,
         details: `Final approval for ${requisition.requisitionNumber}`,
       })
+
+      console.log('DataContext - Activity log added')
     } catch (error) {
       console.error('Error approving account:', error)
       throw error
     }
-  }, [requisitions, updateRequisition, addActivity])
+  }, [requisitions, addActivity])
 
   if (!isInitialized) {
     return (

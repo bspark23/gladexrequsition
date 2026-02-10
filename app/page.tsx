@@ -57,8 +57,10 @@ function LandingPage() {
   const [hasRedirected, setHasRedirected] = useState(false)
 
   useEffect(() => {
-    // TEMPORARILY DISABLE ALL REDIRECTS TO STOP THE LOOP
-    console.log('LandingPage - User check (redirects disabled):', {
+    // Only redirect once and when not loading
+    if (isLoading || hasRedirected) return
+    
+    console.log('LandingPage - User check:', {
       isAuthenticated,
       currentUser: currentUser ? {
         role: currentUser.role,
@@ -69,8 +71,6 @@ function LandingPage() {
       hasRedirected
     })
     
-    // TODO: Re-enable redirects after debugging
-    /*
     if (isAuthenticated && currentUser) {
       console.log('LandingPage - Redirecting authenticated user:')
       console.log('  - Role:', currentUser.role)
@@ -84,7 +84,6 @@ function LandingPage() {
       console.log('  - Target path:', targetPath)
       router.replace(targetPath)
     }
-    */
   }, [isAuthenticated, currentUser, isLoading, router, hasRedirected])
 
   // Don't render anything if we're redirecting

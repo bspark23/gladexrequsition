@@ -27,6 +27,27 @@ export default function AllRequisitionsPage() {
     })
   }, [requisitions, search, statusFilter])
 
+  // Group requisitions by year
+  const requisitionsByYear = useMemo(() => {
+    const grouped: { [year: string]: typeof filteredRequisitions } = {}
+    
+    filteredRequisitions.forEach(req => {
+      const year = new Date(req.createdAt).getFullYear().toString()
+      if (!grouped[year]) {
+        grouped[year] = []
+      }
+      grouped[year].push(req)
+    })
+    
+    // Sort years in descending order (newest first)
+    return Object.keys(grouped)
+      .sort((a, b) => parseInt(b) - parseInt(a))
+      .map(year => ({
+        year,
+        requisitions: grouped[year]
+      }))
+  }, [filteredRequisitions])
+
   return (
     <div className="p-4 lg:p-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
@@ -68,10 +89,30 @@ export default function AllRequisitionsPage() {
         Showing {filteredRequisitions.length} of {requisitions.length} requisitions
       </p>
 
-      <RequisitionTable
-        requisitions={filteredRequisitions}
-        emptyMessage="No requisitions found matching your search criteria"
-      />
+      {/* Requisitions grouped by year */}
+      {requisitionsByYear.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-12 text-center">
+          <p className="text-muted-foreground">No requisitions found matching your search criteria</p>
+        </div>
+      ) : (
+        <div className="space-y-8">
+          {requisitionsByYear.map(({ year, requisitions: yearRequisitions }) => (
+            <div key={year}>
+              {/* Year Label */}
+              <div className="mb-4">
+                <h2 className="text-xl font-semibold text-foreground">{year}</h2>
+                <div className="h-px bg-border mt-2" />
+              </div>
+              
+              {/* Requisitions Table for this year */}
+              <RequisitionTable
+                requisitions={yearRequisitions}
+                emptyMessage={`No requisitions found for ${year}`}
+              />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
