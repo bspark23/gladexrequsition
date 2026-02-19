@@ -74,6 +74,7 @@ export function generateRequisitionPDF(requisition: Requisition, signatureData?:
     <html>
     <head>
       <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
       <title>Material Requisition Form - ${requisition.requisitionNumber || 'N/A'}</title>
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -88,6 +89,15 @@ export function generateRequisitionPDF(requisition: Requisition, signatureData?:
         @media print {
           body { background: white !important; color: black !important; }
           * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        }
+        @media screen and (max-width: 768px) {
+          body { font-size: 12px; }
+          .text-xs { font-size: 0.65rem; }
+          .text-sm { font-size: 0.75rem; }
+          .text-xl { font-size: 1rem; }
+          .p-1 { padding: 0.15rem; }
+          .p-2 { padding: 0.35rem; }
+          .p-4 { padding: 0.75rem; }
         }
         .border-2 { border: 2px solid black; }
         .border { border: 1px solid black; }

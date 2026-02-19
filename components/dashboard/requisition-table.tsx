@@ -109,20 +109,20 @@ export function RequisitionTable({
   const handleDownload = (requisition: Requisition) => {
     // Create signature data from requisition for consistent PDF generation
     // This ensures all PDF downloads across the app look exactly the same
-    // Load signatures from database
+    // Load signatures from database - only include if they exist
     const signatureData = {
-      requestedBy: {
+      requestedBy: requisition.requesterSignature ? {
         name: requisition.requesterName || '',
         date: requisition.createdAt ? new Date(requisition.createdAt).toLocaleDateString('en-GB') : '',
         signature: requisition.requesterSignature // Load from database
-      },
-      reviewedBy: requisition.procurementApprovedBy ? {
-        name: requisition.procurementApprovedBy,
+      } : undefined,
+      reviewedBy: requisition.procurementSignature ? {
+        name: requisition.procurementApprovedBy || '',
         date: requisition.procurementApprovedAt ? new Date(requisition.procurementApprovedAt).toLocaleDateString('en-GB') : '',
         signature: requisition.procurementSignature // Load from database
       } : undefined,
-      approvedBy: requisition.accountApprovedBy ? {
-        name: requisition.accountApprovedBy,
+      approvedBy: requisition.accountSignature ? {
+        name: requisition.accountApprovedBy || '',
         date: requisition.accountApprovedAt ? new Date(requisition.accountApprovedAt).toLocaleDateString('en-GB') : '',
         signature: requisition.accountSignature // Load from database
       } : undefined
@@ -314,20 +314,20 @@ export function RequisitionTable({
             })) || [],
             total: selectedRequisition.totalAmount || 0,
             approvals: {
-              requestedBy: {
+              requestedBy: selectedRequisition.requesterSignature ? {
                 name: selectedRequisition.requesterName || '',
                 date: selectedRequisition.createdAt ? new Date(selectedRequisition.createdAt).toISOString().split('T')[0] : '',
-                signature: selectedRequisition.requesterSignature || '' // Load signature from database
-              },
-              reviewedBy: selectedRequisition.procurementApprovedBy ? {
-                name: selectedRequisition.procurementApprovedBy,
-                date: selectedRequisition.procurementApprovedAt ? new Date(selectedRequisition.procurementApprovedAt).toISOString().split('T')[0] : '',
-                signature: selectedRequisition.procurementSignature || '' // Load signature from database
+                signature: selectedRequisition.requesterSignature // Load signature from database
               } : null,
-              approvedBy: selectedRequisition.accountApprovedBy ? {
-                name: selectedRequisition.accountApprovedBy,
+              reviewedBy: selectedRequisition.procurementSignature ? {
+                name: selectedRequisition.procurementApprovedBy || '',
+                date: selectedRequisition.procurementApprovedAt ? new Date(selectedRequisition.procurementApprovedAt).toISOString().split('T')[0] : '',
+                signature: selectedRequisition.procurementSignature // Load signature from database
+              } : null,
+              approvedBy: selectedRequisition.accountSignature ? {
+                name: selectedRequisition.accountApprovedBy || '',
                 date: selectedRequisition.accountApprovedAt ? new Date(selectedRequisition.accountApprovedAt).toISOString().split('T')[0] : '',
-                signature: selectedRequisition.accountSignature || '' // Load signature from database
+                signature: selectedRequisition.accountSignature // Load signature from database
               } : null
             },
             status: selectedRequisition.status === 'Pending Procurement' ? 'requested' : 
